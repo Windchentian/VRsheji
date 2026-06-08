@@ -3,13 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Vibe AR - Touch Particles</title>
+    <title>Vibe AR - iOS Fixed</title>
     <style>
         * {
             box-sizing: border-box;
             margin: 0;
             padding: 0;
-            /* 禁止选中文字和默认的触控行为，让划动更顺滑 */
             user-select: none;
             -webkit-user-select: none;
             touch-action: none;
@@ -20,7 +19,6 @@
             overflow: hidden;
             background-color: #000;
         }
-        /* 底层：摄像头画面 */
         #video-container {
             position: absolute;
             top: 0;
@@ -32,25 +30,25 @@
         video {
             width: 100%;
             height: 100%;
+            display: block;
             object-fit: cover;
         }
-        /* 顶层：粒子画布 */
         #particle_canvas {
             position: absolute;
             top: 0;
             left: 0;
             width: 100%;
             height: 100%;
-            z-index: 10; /* 画布在最上面，用来接收触摸 */
+            z-index: 5;
+            background: transparent;
         }
-        /* UI 提示层 */
         #ui-layer {
             position: absolute;
-            top: env(safe-area-inset-top);
+            top: calc(env(safe-area-inset-top) + 10px);
             left: 0;
             width: 100%;
-            z-index: 20;
-            pointer-events: none; /* 让触摸穿透文字，点到画布上 */
+            z-index: 10;
+            pointer-events: none;
             padding: 20px;
             color: #fff;
             font-family: sans-serif;
@@ -58,12 +56,26 @@
         }
         .status {
             font-size: 0.85rem;
-            background: rgba(0, 0, 0, 0.4);
+            background: rgba(0, 0, 0, 0.6);
             padding: 8px 16px;
             border-radius: 20px;
             display: inline-block;
             backdrop-filter: blur(5px);
             border: 1px solid rgba(255,255,255,0.2);
+        }
+        /* 报错收集箱 */
+        #debug-box {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0,0,0,0.8);
+            color: #ff3b30;
+            padding: 10px;
+            font-size: 0.8rem;
+            border-radius: 5px;
+            z-index: 100;
+            display: none;
+            pointer-events: none;
         }
     </style>
 </head>
@@ -76,30 +88,47 @@
     <canvas id="particle_canvas"></canvas>
 
     <div id="ui-layer">
-        <div class="status" id="status-text">✨ 划动屏幕生成粒子，双击引爆！</div>
+        <div class="status" id="status-text">🔄 正在唤醒摄像头...</div>
     </div>
 
+    <div id="debug-box"></div>
+
     <script>
-        // ----------------- 1. 摄像头启动逻辑 (最稳定版) -----------------
+        // 实时监控是否有代码死掉，直接显示在手机上
+        window.onerror = function(msg, url, line) {
+            const box = document.getElementById('debug-box');
+            box.style.display = 'block';
+            box.innerHTML += `脚本奔溃: ${msg} (第${line}行)<br>`;
+            return false;
+        };
+
         const video = document.getElementById('webcam');
+        const statusText = document.getElementById('status-text');
+
+        // ----------------- 1. 强力破除 iOS 黑屏 -----------------
         async function startCamera() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
                     audio: false,
-                    video: { facingMode: "environment" } // 兼容性最强的后置请求
+                    video: { facingMode: { ideal: "environment" } }
                 });
                 video.srcObject = stream;
+                
+                // 【核心修复】强行命令视频播放，踢开 iOS 标志性的黑屏
+                await video.play();
+                
+                statusText.textContent = "✨ 魔法场已连通！请划动屏幕";
+                statusText.style.background = "rgba(0, 128, 0, 0.6)";
             } catch (err) {
-                console.error("相机报错, 但不影响粒子特效:", err);
+                statusText.textContent = "❌ 相机启动失败: " + err.message;
+                statusText.style.background = "rgba(128, 0, 0, 0.6)";
             }
         }
-        startCamera();
 
-        // ----------------- 2. 酷炫粒子引擎 -----------------
+        // ----------------- 2. 丝滑粒子系统 -----------------
         const canvas = document.getElementById('particle_canvas');
         const ctx = canvas.getContext('2d');
 
-        // 自动适配屏幕大小
         function resize() {
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
@@ -108,59 +137,24 @@
         resize();
 
         let particles = [];
-        // 赛博朋克配色库
         const colors = ['#00ffff', '#ff00ff', '#ffff00', '#ffffff', '#00ffaa'];
 
         class Particle {
             constructor(x, y, isExplosion = false) {
                 this.x = x;
                 this.y = y;
-                // 如果是爆炸产生的粒子，初速度极大；否则只是指尖的轻微漂浮
-                const baseSpeed = isExplosion ? (Math.random() * 15 + 5) : (Math.random() * 2 - 1);
+                const baseSpeed = isExplosion ? (Math.random() * 12 + 4) : (Math.random() * 2 - 1);
                 const angle = Math.random() * Math.PI * 2;
                 this.vx = Math.cos(angle) * baseSpeed;
                 this.vy = Math.sin(angle) * baseSpeed;
-                
-                this.size = Math.random() * 4 + 1; // 粒子大小
+                this.size = Math.random() * 4 + 1;
                 this.color = colors[Math.floor(Math.random() * colors.length)];
-                this.life = 1.0; // 寿命 1.0 -> 0
-                this.decay = Math.random() * 0.02 + 0.01; // 消失的速度
+                this.life = 1.0;
+                this.decay = Math.random() * 0.02 + 0.015;
             }
-
             update() {
                 this.x += this.vx;
                 this.y += this.vy;
-                
-                // 增加一点重力感（缓慢下坠）
-                this.vy += 0.05;
-                
-                // 摩擦力，让速度慢慢降下来
-                this.vx *= 0.98;
-                this.vy *= 0.98;
-
-                this.life -= this.decay;
-            }
-
-            draw() {
-                ctx.globalAlpha = Math.max(0, this.life);
-                ctx.fillStyle = this.color;
-                
-                // 发光效果
-                ctx.shadowBlur = 10;
-                ctx.shadowColor = this.color;
-                
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-                ctx.fill();
-            }
-        }
-
-        // ----------------- 3. 交互控制 (划动与双击) -----------------
-        function spawnParticles(x, y, count = 3) {
-            for (let i = 0; i < count; i++) {
-                particles.push(new Particle(x, y));
-            }
-        }
-
-        // 划动屏幕产生粒子
-        canvas.addEventLi
+                this.vy += 0.04; // 微弱的重力下坠
+                this.vx *= 0.97;
+                this.vy *

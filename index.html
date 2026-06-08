@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Vibe AR Project - Step 1.5</title>
+    <title>Vibe AR Project - Step 2 Hand Tracking</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
     <style>
         * {
             box-sizing: border-box;
@@ -15,7 +17,9 @@
             height: 100%;
             overflow: hidden;
             background-color: #000;
+            position: relative;
         }
+        /* 摄像头画面置底 */
         #video-container {
             position: absolute;
             top: 0;
@@ -29,6 +33,15 @@
             height: 100%;
             object-fit: cover;
         }
+        /* AI 骨骼绘制层（在摄像头上面） */
+        #output_canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+        }
         #ui-layer {
             position: absolute;
             top: 0;
@@ -40,11 +53,12 @@
             padding: 20px;
             color: #fff;
             font-family: sans-serif;
+            margin-top: calc(env(safe-area-inset-top) + 10px);
         }
         .status {
             font-size: 0.9rem;
             background: rgba(0, 0, 0, 0.6);
-            padding: 6px 12px;
+            padding: 8px 16px;
             border-radius: 20px;
             display: inline-block;
             backdrop-filter: blur(5px);
@@ -57,59 +71,84 @@
         <video id="webcam" autoplay playsinline></video>
     </div>
 
+    <canvas id="output_canvas"></canvas>
+
     <div id="ui-layer">
-        <div class="status" id="status-text">正在请求1x标准后置摄像头...</div>
+        <div class="status" id="status-text">正在加载 AI 手势模型...</div>
     </div>
 
     <script>
         const video = document.getElementById('webcam');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
         const statusText = document.getElementById('status-text');
 
-        async function initCamera() {
-            // 高级摄像头配置：请求1080P高清，并请求标准的后置镜头(environment)
+        // 初始化 MediaPipe Hands
+        const hands = new Hands({
+            locateFile: (file) => {
+                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+            }
+        });
+
+        // 配置：只找一只手，性能优先，准确度一般即可
+        hands.setOptions({
+            maxNumHands: 1, // 限制识别一只手以提高手机端速度
+            modelComplexity: 1, // 模型复杂度：1代表平衡（适中，最适合手机）
+            minDetectionConfidence: 0.5, // 检测置信度：0.5
+            minTrackingConfidence: 0.5 // 追踪置信度：0.5
+        });
+
+        // 这里是 AI 识别到手后的处理函数 (核心！)
+        hands.onResults(onResults);
+
+        function onResults(results) {
+            // 在这一步先确保画布的大小和视频流一致
+            canvasElement.width = video.videoWidth;
+            canvasElement.height = video.videoHeight;
+
+            // 1. 清空画布
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+            // 如果 AI 有发现手部关节 (multiHandLandmarks)
+            if (results.multiHandLandmarks) {
+                for (const landmarks of results.multiHandLandmarks) {
+                    // 2. 使用 drawingUtils 工具，绘制绿色的关节连线 (Skeleton)
+                    drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 4});
+                    // 3. 绘制关节红点 (Landmarks)
+                    drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 1, radius: 4});
+                }
+            }
+            canvasCtx.restore();
+        }
+
+        // 启动摄像头并持续喂给 AI 数据
+        async function init() {
+            // 摄像头高级配置（沿用上一步1080p标准配置）
             const constraints = {
                 audio: false,
                 video: {
                     facingMode: { ideal: "environment" },
-                    // 提升分辨率到 1080p，这样视野通常会回归到正常的 1x 广角主摄
-                    width: { min: 640, ideal: 1920, max: 1920 },
-                    height: { min: 480, ideal: 1080, max: 1080 },
-                    // 提示浏览器尽量不要使用长焦或裁剪模式
-                    frameRate: { ideal: 30 }
+                    width: { ideal: 1920 },
+                    height: { ideal: 1080 }
                 }
             };
 
             try {
-                // 如果之前有流在运行，先关掉它
-                if (video.srcObject) {
-                    video.srcObject.getTracks().forEach(track => track.stop());
-                }
-
                 const stream = await navigator.mediaDevices.getUserMedia(constraints);
                 video.srcObject = stream;
                 
-                statusText.textContent = "1x 高清后置摄像头连接成功 🟢";
-                statusText.style.background = "rgba(0, 128, 0, 0.6)";
-            } catch (error) {
-                console.error("标准摄像头获取失败，尝试备用容错方案:", error);
-                
-                // 容错降级方案：如果1080p太严格报错了，就用普通模式启动
-                try {
-                    const fallbackStream = await navigator.mediaDevices.getUserMedia({ 
-                        audio: false, 
-                        video: { facingMode: "environment" } 
-                    });
-                    video.srcObject = fallbackStream;
-                    statusText.textContent = "后置摄像头兼容模式启动 🟡";
-                    statusText.style.background = "rgba(218, 165, 32, 0.6)";
-                } catch (err2) {
-                    statusText.textContent = "摄像头连接失败 🔴 (原因: " + err2.message + ")";
-                    statusText.style.background = "rgba(128, 0, 0, 0.6)";
+                // 【核心逻辑】每当摄像头有新画面，就自动运行这个内部循环
+                async function predictLoop() {
+                    if (video.readyState >= video.HAVE_CURRENT_DATA) {
+                        // 将当前的摄像头画面喂给 Hands AI
+                        await hands.send({image: video});
+                    }
+                    // 持续在下一帧运行这个循环
+                    requestAnimationFrame(predictLoop);
                 }
-            }
-        }
-
-        window.addEventListener('DOMContentLoaded', initCamera);
-    </script>
-</body>
-</html>
+                
+                predictLoop(); // 启动循环
+                
+                statusText.textContent = "AI 追踪已就绪 (1x高清) 🟢";
+                statusText.style.backgro

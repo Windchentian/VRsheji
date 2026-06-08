@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Vibe AR Project - Step 2 (Speed Up)</title>
+    <title>Vibe AR Project - Step 2.5 Fix</title>
     <script src="https://fastly.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
     <script src="https://fastly.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
     <style>
@@ -55,107 +55,106 @@
         }
         .status {
             font-size: 0.9rem;
-            background: rgba(255, 140, 0, 0.7); /* 橙色代表加载中 */
+            background: rgba(0, 0, 0, 0.7);
             padding: 8px 16px;
             border-radius: 20px;
             display: inline-block;
             backdrop-filter: blur(5px);
-        }
-        #debug-log {
-            position: absolute;
-            bottom: 20px;
-            left: 20px;
-            background: rgba(0,0,0,0.7);
-            color: #ff3b30;
-            padding: 10px;
-            font-size: 0.8rem;
-            border-radius: 5px;
-            max-width: 80%;
-            display: none;
-            z-index: 100;
         }
     </style>
 </head>
 <body>
 
     <div id="video-container">
-        <video id="webcam" autoplay playsinline></video>
+        <video id="webcam" autoplay playsinline muted></video>
     </div>
 
     <canvas id="output_canvas"></canvas>
 
     <div id="ui-layer">
-        <div class="status" id="status-text">🚀 正在通过国内加速节点加载 AI 模型...</div>
+        <div class="status" id="status-text">📷 正在启动相机...</div>
     </div>
-
-    <div id="debug-log" id="log-box"></div>
 
     <script>
         const video = document.getElementById('webcam');
         const canvasElement = document.getElementById('output_canvas');
         const canvasCtx = canvasElement.getContext('2d');
         const statusText = document.getElementById('status-text');
-        const logBox = document.getElementById('debug-log');
 
-        function showDebug(msg) {
-            logBox.style.display = 'block';
-            logBox.innerHTML += msg + '<br>';
-        }
+        let hands = null;
+        let cameraActive = false;
 
-        // 初始化 MediaPipe Hands，同样定向到国内加速 CDN 文件
-        const hands = new Hands({
-            locateFile: (file) => {
-                return `https://fastly.jsdelivr.net/npm/@mediapipe/hands/${file}`;
-            }
-        });
-
-        hands.setOptions({
-            maxNumHands: 1,
-            modelComplexity: 1,
-            minDetectionConfidence: 0.5,
-            minTrackingConfidence: 0.5
-        });
-
-        hands.onResults(onResults);
-
-        // 标记 AI 是否已经收到了第一帧结果
-        let aiReady = false;
-
-        function onResults(results) {
-            if (!aiReady) {
-                aiReady = true;
-                statusText.textContent = "AI 追踪已就绪 (高速模式) 🟢";
-                statusText.style.background = "rgba(0, 128, 0, 0.6)";
-            }
-
-            canvasElement.width = video.videoWidth;
-            canvasElement.height = video.videoHeight;
-
-            canvasCtx.save();
-            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-
-            if (results.multiHandLandmarks) {
-                for (const landmarks of results.multiHandLandmarks) {
-                    drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 4});
-                    drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 1, radius: 4});
-                }
-            }
-            canvasCtx.restore();
-        }
-
-        async function init() {
-            const constraints = {
-                audio: false,
-                video: {
-                    facingMode: { ideal: "environment" },
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 } // 稍微降低到720P以减轻手机端AI计算负担，提升流畅度
-                }
-            };
-
+        // 第一步：雷打不动先让摄像头跑起来
+        async function startCamera() {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: false,
+                    video: {
+                        facingMode: { ideal: "environment" },
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    }
+                });
                 video.srcObject = stream;
+                video.onloadedmetadata = () => {
+                    cameraActive = true;
+                    statusText.textContent = "📷 相机已就绪，正在后台加载 AI 核心...";
+                    statusText.style.background = "rgba(255, 140, 0, 0.7)"; // 变成橙色提示开始载入AI
+                    // 相机画面出来后，再开始慢慢加载 AI，防止互相抢占资源导致黑屏
+                    initAI();
+                };
+            } catch (err) {
+                statusText.textContent = "🔴 相机启动失败: " + err.message;
+                statusText.style.background = "rgba(128, 0, 0, 0.7)";
+            }
+        }
+
+        // 第二步：相机平稳运行后，再去加载 AI 引擎
+        function initAI() {
+            try {
+                // 如果发现 MediaPipe 库在全局不存在，说明CDN本身断联
+                if (typeof Hands === 'undefined') {
+                    statusText.textContent = "❌ 加载组件超时，请刷新网页重试";
+                    return;
+                }
+
+                hands = new Hands({
+                    locateFile: (file) => {
+                        // 强制改用完全不受区域限制的高稳定 CDN 路径
+                        return `https://fastly.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424510/${file}`;
+                    }
+                });
+
+                hands.setOptions({
+                    maxNumHands: 1,
+                    modelComplexity: 1,
+                    minDetectionConfidence: 0.6,
+                    minTrackingConfidence: 0.6
+                });
+
+                hands.onResults(onResults);
                 
-                async function predictLoop() {
-                    if (video.readyState >= video.HAVE_CURRENT_DAT
+                // 启动循环监听机制
+                predictLoop();
+
+            } catch (e) {
+                statusText.textContent = "🔴 AI 模块异常: " + e.message;
+            }
+        }
+
+        // 核心运算循环
+        async function predictLoop() {
+            if (cameraActive && video.readyState >= video.HAVE_CURRENT_DATA && hands) {
+                try {
+                    await hands.send({image: video});
+                } catch (err) {
+                    // 默默忽略单帧抖动产生的运算错误
+                }
+            }
+            // 保持每秒60帧的节奏循环检查
+            requestAnimationFrame(predictLoop);
+        }
+
+        // AI 成功吐出结果后的渲染
+        let firstFrameDetected = false;
+      

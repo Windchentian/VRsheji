@@ -2,8 +2,8 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Vibe AR Project - Step 1</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Vibe AR Project - Step 1.5</title>
     <style>
         * {
             box-sizing: border-box;
@@ -27,7 +27,7 @@
         video {
             width: 100%;
             height: 100%;
-            object-fit: cover; /* 让摄像头画面铺满全屏 */
+            object-fit: cover;
         }
         #ui-layer {
             position: absolute;
@@ -36,17 +36,18 @@
             width: 100%;
             height: 100%;
             z-index: 10;
-            pointer-events: none; /* 让这一层不挡住后续的手势交互 */
+            pointer-events: none;
             padding: 20px;
             color: #fff;
             font-family: sans-serif;
         }
         .status {
             font-size: 0.9rem;
-            background: rgba(0,0,0,0.5);
+            background: rgba(0, 0, 0, 0.6);
             padding: 6px 12px;
             border-radius: 20px;
             display: inline-block;
+            backdrop-filter: blur(5px);
         }
     </style>
 </head>
@@ -57,7 +58,7 @@
     </div>
 
     <div id="ui-layer">
-        <div class="status" id="status-text">正在请求后置摄像头权限...</div>
+        <div class="status" id="status-text">正在请求1x标准后置摄像头...</div>
     </div>
 
     <script>
@@ -65,29 +66,49 @@
         const statusText = document.getElementById('status-text');
 
         async function initCamera() {
-            // 配置：不需要声音，画面优先使用后置摄像头(environment)
+            // 高级摄像头配置：请求1080P高清，并请求标准的后置镜头(environment)
             const constraints = {
                 audio: false,
                 video: {
                     facingMode: { ideal: "environment" },
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 }
+                    // 提升分辨率到 1080p，这样视野通常会回归到正常的 1x 广角主摄
+                    width: { min: 640, ideal: 1920, max: 1920 },
+                    height: { min: 480, ideal: 1080, max: 1080 },
+                    // 提示浏览器尽量不要使用长焦或裁剪模式
+                    frameRate: { ideal: 30 }
                 }
             };
 
             try {
+                // 如果之前有流在运行，先关掉它
+                if (video.srcObject) {
+                    video.srcObject.getTracks().forEach(track => track.stop());
+                }
+
                 const stream = await navigator.mediaDevices.getUserMedia(constraints);
                 video.srcObject = stream;
-                statusText.textContent = "后置摄像头连接成功 🟢";
+                
+                statusText.textContent = "1x 高清后置摄像头连接成功 🟢";
                 statusText.style.background = "rgba(0, 128, 0, 0.6)";
             } catch (error) {
-                console.error("摄像头获取失败:", error);
-                statusText.textContent = "摄像头连接失败 🔴 (原因: " + error.message + ")";
-                statusText.style.background = "rgba(128, 0, 0, 0.6)";
+                console.error("标准摄像头获取失败，尝试备用容错方案:", error);
+                
+                // 容错降级方案：如果1080p太严格报错了，就用普通模式启动
+                try {
+                    const fallbackStream = await navigator.mediaDevices.getUserMedia({ 
+                        audio: false, 
+                        video: { facingMode: "environment" } 
+                    });
+                    video.srcObject = fallbackStream;
+                    statusText.textContent = "后置摄像头兼容模式启动 🟡";
+                    statusText.style.background = "rgba(218, 165, 32, 0.6)";
+                } catch (err2) {
+                    statusText.textContent = "摄像头连接失败 🔴 (原因: " + err2.message + ")";
+                    statusText.style.background = "rgba(128, 0, 0, 0.6)";
+                }
             }
         }
 
-        // 页面加载完后自动启动摄像头
         window.addEventListener('DOMContentLoaded', initCamera);
     </script>
 </body>

@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Vibe AR Project - Step 2 Hand Tracking</title>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <title>Vibe AR Project - Step 2 (Speed Up)</title>
+    <script src="https://fastly.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://fastly.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
     <style>
         * {
             box-sizing: border-box;
@@ -19,7 +19,6 @@
             background-color: #000;
             position: relative;
         }
-        /* 摄像头画面置底 */
         #video-container {
             position: absolute;
             top: 0;
@@ -33,7 +32,6 @@
             height: 100%;
             object-fit: cover;
         }
-        /* AI 骨骼绘制层（在摄像头上面） */
         #output_canvas {
             position: absolute;
             top: 0;
@@ -57,11 +55,24 @@
         }
         .status {
             font-size: 0.9rem;
-            background: rgba(0, 0, 0, 0.6);
+            background: rgba(255, 140, 0, 0.7); /* 橙色代表加载中 */
             padding: 8px 16px;
             border-radius: 20px;
             display: inline-block;
             backdrop-filter: blur(5px);
+        }
+        #debug-log {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0,0,0,0.7);
+            color: #ff3b30;
+            padding: 10px;
+            font-size: 0.8rem;
+            border-radius: 5px;
+            max-width: 80%;
+            display: none;
+            z-index: 100;
         }
     </style>
 </head>
@@ -74,63 +85,71 @@
     <canvas id="output_canvas"></canvas>
 
     <div id="ui-layer">
-        <div class="status" id="status-text">正在加载 AI 手势模型...</div>
+        <div class="status" id="status-text">🚀 正在通过国内加速节点加载 AI 模型...</div>
     </div>
+
+    <div id="debug-log" id="log-box"></div>
 
     <script>
         const video = document.getElementById('webcam');
         const canvasElement = document.getElementById('output_canvas');
         const canvasCtx = canvasElement.getContext('2d');
         const statusText = document.getElementById('status-text');
+        const logBox = document.getElementById('debug-log');
 
-        // 初始化 MediaPipe Hands
+        function showDebug(msg) {
+            logBox.style.display = 'block';
+            logBox.innerHTML += msg + '<br>';
+        }
+
+        // 初始化 MediaPipe Hands，同样定向到国内加速 CDN 文件
         const hands = new Hands({
             locateFile: (file) => {
-                return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+                return `https://fastly.jsdelivr.net/npm/@mediapipe/hands/${file}`;
             }
         });
 
-        // 配置：只找一只手，性能优先，准确度一般即可
         hands.setOptions({
-            maxNumHands: 1, // 限制识别一只手以提高手机端速度
-            modelComplexity: 1, // 模型复杂度：1代表平衡（适中，最适合手机）
-            minDetectionConfidence: 0.5, // 检测置信度：0.5
-            minTrackingConfidence: 0.5 // 追踪置信度：0.5
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
         });
 
-        // 这里是 AI 识别到手后的处理函数 (核心！)
         hands.onResults(onResults);
 
+        // 标记 AI 是否已经收到了第一帧结果
+        let aiReady = false;
+
         function onResults(results) {
-            // 在这一步先确保画布的大小和视频流一致
+            if (!aiReady) {
+                aiReady = true;
+                statusText.textContent = "AI 追踪已就绪 (高速模式) 🟢";
+                statusText.style.background = "rgba(0, 128, 0, 0.6)";
+            }
+
             canvasElement.width = video.videoWidth;
             canvasElement.height = video.videoHeight;
 
-            // 1. 清空画布
             canvasCtx.save();
             canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
 
-            // 如果 AI 有发现手部关节 (multiHandLandmarks)
             if (results.multiHandLandmarks) {
                 for (const landmarks of results.multiHandLandmarks) {
-                    // 2. 使用 drawingUtils 工具，绘制绿色的关节连线 (Skeleton)
                     drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 4});
-                    // 3. 绘制关节红点 (Landmarks)
                     drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 1, radius: 4});
                 }
             }
             canvasCtx.restore();
         }
 
-        // 启动摄像头并持续喂给 AI 数据
         async function init() {
-            // 摄像头高级配置（沿用上一步1080p标准配置）
             const constraints = {
                 audio: false,
                 video: {
                     facingMode: { ideal: "environment" },
-                    width: { ideal: 1920 },
-                    height: { ideal: 1080 }
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 } // 稍微降低到720P以减轻手机端AI计算负担，提升流畅度
                 }
             };
 
@@ -138,17 +157,5 @@
                 const stream = await navigator.mediaDevices.getUserMedia(constraints);
                 video.srcObject = stream;
                 
-                // 【核心逻辑】每当摄像头有新画面，就自动运行这个内部循环
                 async function predictLoop() {
-                    if (video.readyState >= video.HAVE_CURRENT_DATA) {
-                        // 将当前的摄像头画面喂给 Hands AI
-                        await hands.send({image: video});
-                    }
-                    // 持续在下一帧运行这个循环
-                    requestAnimationFrame(predictLoop);
-                }
-                
-                predictLoop(); // 启动循环
-                
-                statusText.textContent = "AI 追踪已就绪 (1x高清) 🟢";
-                statusText.style.backgro
+                    if (video.readyState >= video.HAVE_CURRENT_DAT

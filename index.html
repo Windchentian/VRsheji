@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Vibe AR Project - Step 1</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #000;
+        }
+        #video-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover; /* 让摄像头画面铺满全屏 */
+        }
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            pointer-events: none; /* 让这一层不挡住后续的手势交互 */
+            padding: 20px;
+            color: #fff;
+            font-family: sans-serif;
+        }
+        .status {
+            font-size: 0.9rem;
+            background: rgba(0,0,0,0.5);
+            padding: 6px 12px;
+            border-radius: 20px;
+            display: inline-block;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="video-container">
+        <video id="webcam" autoplay playsinline></video>
+    </div>
+
+    <div id="ui-layer">
+        <div class="status" id="status-text">正在请求后置摄像头权限...</div>
+    </div>
+
+    <script>
+        const video = document.getElementById('webcam');
+        const statusText = document.getElementById('status-text');
+
+        async function initCamera() {
+            // 配置：不需要声音，画面优先使用后置摄像头(environment)
+            const constraints = {
+                audio: false,
+                video: {
+                    facingMode: { ideal: "environment" },
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                }
+            };
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = stream;
+                statusText.textContent = "后置摄像头连接成功 🟢";
+                statusText.style.background = "rgba(0, 128, 0, 0.6)";
+            } catch (error) {
+                console.error("摄像头获取失败:", error);
+                statusText.textContent = "摄像头连接失败 🔴 (原因: " + error.message + ")";
+                statusText.style.background = "rgba(128, 0, 0, 0.6)";
+            }
+        }
+
+        // 页面加载完后自动启动摄像头
+        window.addEventListener('DOMContentLoaded', initCamera);
+    </script>
+</body>
+</html>

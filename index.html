@@ -3,22 +3,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Vibe AR Project - Step 2.5 Fix</title>
-    <script src="https://fastly.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
-    <script src="https://fastly.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <title>Vibe AR - Touch Particles</title>
     <style>
         * {
             box-sizing: border-box;
             margin: 0;
             padding: 0;
+            /* 禁止选中文字和默认的触控行为，让划动更顺滑 */
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
         }
         body, html {
             width: 100%;
             height: 100%;
             overflow: hidden;
             background-color: #000;
-            position: relative;
         }
+        /* 底层：摄像头画面 */
         #video-container {
             position: absolute;
             top: 0;
@@ -32,34 +34,36 @@
             height: 100%;
             object-fit: cover;
         }
-        #output_canvas {
+        /* 顶层：粒子画布 */
+        #particle_canvas {
             position: absolute;
             top: 0;
             left: 0;
             width: 100%;
             height: 100%;
-            z-index: 2;
+            z-index: 10; /* 画布在最上面，用来接收触摸 */
         }
+        /* UI 提示层 */
         #ui-layer {
             position: absolute;
-            top: 0;
+            top: env(safe-area-inset-top);
             left: 0;
             width: 100%;
-            height: 100%;
-            z-index: 10;
-            pointer-events: none;
+            z-index: 20;
+            pointer-events: none; /* 让触摸穿透文字，点到画布上 */
             padding: 20px;
             color: #fff;
             font-family: sans-serif;
-            margin-top: calc(env(safe-area-inset-top) + 10px);
+            text-align: center;
         }
         .status {
-            font-size: 0.9rem;
-            background: rgba(0, 0, 0, 0.7);
+            font-size: 0.85rem;
+            background: rgba(0, 0, 0, 0.4);
             padding: 8px 16px;
             border-radius: 20px;
             display: inline-block;
             backdrop-filter: blur(5px);
+            border: 1px solid rgba(255,255,255,0.2);
         }
     </style>
 </head>
@@ -69,92 +73,94 @@
         <video id="webcam" autoplay playsinline muted></video>
     </div>
 
-    <canvas id="output_canvas"></canvas>
+    <canvas id="particle_canvas"></canvas>
 
     <div id="ui-layer">
-        <div class="status" id="status-text">📷 正在启动相机...</div>
+        <div class="status" id="status-text">✨ 划动屏幕生成粒子，双击引爆！</div>
     </div>
 
     <script>
+        // ----------------- 1. 摄像头启动逻辑 (最稳定版) -----------------
         const video = document.getElementById('webcam');
-        const canvasElement = document.getElementById('output_canvas');
-        const canvasCtx = canvasElement.getContext('2d');
-        const statusText = document.getElementById('status-text');
-
-        let hands = null;
-        let cameraActive = false;
-
-        // 第一步：雷打不动先让摄像头跑起来
         async function startCamera() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
                     audio: false,
-                    video: {
-                        facingMode: { ideal: "environment" },
-                        width: { ideal: 1280 },
-                        height: { ideal: 720 }
-                    }
+                    video: { facingMode: "environment" } // 兼容性最强的后置请求
                 });
                 video.srcObject = stream;
-                video.onloadedmetadata = () => {
-                    cameraActive = true;
-                    statusText.textContent = "📷 相机已就绪，正在后台加载 AI 核心...";
-                    statusText.style.background = "rgba(255, 140, 0, 0.7)"; // 变成橙色提示开始载入AI
-                    // 相机画面出来后，再开始慢慢加载 AI，防止互相抢占资源导致黑屏
-                    initAI();
-                };
             } catch (err) {
-                statusText.textContent = "🔴 相机启动失败: " + err.message;
-                statusText.style.background = "rgba(128, 0, 0, 0.7)";
+                console.error("相机报错, 但不影响粒子特效:", err);
             }
         }
+        startCamera();
 
-        // 第二步：相机平稳运行后，再去加载 AI 引擎
-        function initAI() {
-            try {
-                // 如果发现 MediaPipe 库在全局不存在，说明CDN本身断联
-                if (typeof Hands === 'undefined') {
-                    statusText.textContent = "❌ 加载组件超时，请刷新网页重试";
-                    return;
-                }
+        // ----------------- 2. 酷炫粒子引擎 -----------------
+        const canvas = document.getElementById('particle_canvas');
+        const ctx = canvas.getContext('2d');
 
-                hands = new Hands({
-                    locateFile: (file) => {
-                        // 强制改用完全不受区域限制的高稳定 CDN 路径
-                        return `https://fastly.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424510/${file}`;
-                    }
-                });
+        // 自动适配屏幕大小
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
 
-                hands.setOptions({
-                    maxNumHands: 1,
-                    modelComplexity: 1,
-                    minDetectionConfidence: 0.6,
-                    minTrackingConfidence: 0.6
-                });
+        let particles = [];
+        // 赛博朋克配色库
+        const colors = ['#00ffff', '#ff00ff', '#ffff00', '#ffffff', '#00ffaa'];
 
-                hands.onResults(onResults);
+        class Particle {
+            constructor(x, y, isExplosion = false) {
+                this.x = x;
+                this.y = y;
+                // 如果是爆炸产生的粒子，初速度极大；否则只是指尖的轻微漂浮
+                const baseSpeed = isExplosion ? (Math.random() * 15 + 5) : (Math.random() * 2 - 1);
+                const angle = Math.random() * Math.PI * 2;
+                this.vx = Math.cos(angle) * baseSpeed;
+                this.vy = Math.sin(angle) * baseSpeed;
                 
-                // 启动循环监听机制
-                predictLoop();
+                this.size = Math.random() * 4 + 1; // 粒子大小
+                this.color = colors[Math.floor(Math.random() * colors.length)];
+                this.life = 1.0; // 寿命 1.0 -> 0
+                this.decay = Math.random() * 0.02 + 0.01; // 消失的速度
+            }
 
-            } catch (e) {
-                statusText.textContent = "🔴 AI 模块异常: " + e.message;
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                
+                // 增加一点重力感（缓慢下坠）
+                this.vy += 0.05;
+                
+                // 摩擦力，让速度慢慢降下来
+                this.vx *= 0.98;
+                this.vy *= 0.98;
+
+                this.life -= this.decay;
+            }
+
+            draw() {
+                ctx.globalAlpha = Math.max(0, this.life);
+                ctx.fillStyle = this.color;
+                
+                // 发光效果
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = this.color;
+                
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
             }
         }
 
-        // 核心运算循环
-        async function predictLoop() {
-            if (cameraActive && video.readyState >= video.HAVE_CURRENT_DATA && hands) {
-                try {
-                    await hands.send({image: video});
-                } catch (err) {
-                    // 默默忽略单帧抖动产生的运算错误
-                }
+        // ----------------- 3. 交互控制 (划动与双击) -----------------
+        function spawnParticles(x, y, count = 3) {
+            for (let i = 0; i < count; i++) {
+                particles.push(new Particle(x, y));
             }
-            // 保持每秒60帧的节奏循环检查
-            requestAnimationFrame(predictLoop);
         }
 
-        // AI 成功吐出结果后的渲染
-        let firstFrameDetected = false;
-      
+        // 划动屏幕产生粒子
+        canvas.addEventLi
